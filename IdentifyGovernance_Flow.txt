@@ -1,0 +1,115 @@
+I read [utilities/logger.py](utilities/logger.py) and the identity-related files. I haven't changed anything. Two problems in `logger.py` need fixing before it will work in this project, and after that I list where to add logger statements.
+
+---
+
+## Step 0: Fix logger.py first (it will crash as it is)
+
+**Problem 1: line 10 imports a module from a different project.**
+```python
+from policypilot.config import REPO_ROOT   # ❌ there is no "policypilot" in this project
+```
+This raises `ModuleNotFoundError`. Replace it with:
+```python
+from pathlib import Path
+REPO_ROOT = Path(__file__).resolve().parent.parent   # utilities/ -> project root
+```
+
+**Problem 2: the agent and the dashboard would both write to the same file.** They run in separate containers, and both write into your project folder through the `.:/app` mount. Two processes writing to and rotating one file can garble it. Give each service its own file by adding a parameter:
+```python
+def setup_logger(level: str = "INFO", service: str = "app") -> None:
+    ...
+    logger.add(LOG_DIR / f"logs_aigovernance_{service}.txt", ...)
+```
+
+The docstring on lines 1–4 also still mentions "pipeline" and "streamlit_app" from the old project. Update it if you like; it doesn't affect how the code runs.
+
+## Step 1: Install loguru in both containers
+`loguru` isn't listed in any requirements file. Add this line to both files:
+- [agent/requirements.txt](agent/requirements.txt): `loguru`
+- [dashboard/requirements.txt](dashboard/requirements.txt): `loguru`
+
+The packages are installed when the image is built, so you'll need to rebuild (Step 7).
+
+## Step 2: Keep log files out of git
+Add `logs/` to [.gitignore](.gitignore). It doesn't contain that entry yet.
+
+**Your code doesn't need to be copied into the containers.** `docker-compose.yml` mounts your project folder at `/app`, and `PYTHONPATH=/app` is set, so `from utilities.logger import setup_logger` works in both containers. Log files will appear in `d:\AgenticAI_Projects\AI_Governance\logs\` on your computer.
+
+---
+
+## Where to add logger statements (identity flow, in the order a request runs)
+
+**Never log the password or the token itself.** Log the username, role and outcome only.
+
+### Step 3: [dashboard/app.py](dashboard/app.py) (the Streamlit side)
+- **After the imports (around line 32):**
+  ```python
+  from loguru import logger
+  from utilities.logger import setup_logger
+  setup_logger(level="DEBUG", service="dashboard")
+  ```
+  Streamlit reruns this file on every click. That's safe because `logger.remove()` in `setup_logger` clears the old handlers first.
+- **Inside the "Send request" block, around lines 155–160:**
+  - before `get_demo_token`: `logger.info("Login attempt as '{}'", username)`
+  - after the token is received: `logger.info("Got Keycloak token for '{}'", username)`
+  - after `requests.post`: `logger.info("/chat responded {}", resp.status_code)`
+  - in `except`: `logger.exception("Request failed for '{}'", username)`
+
+### Step 4: [agent/keycloak_auth.py](agent/keycloak_auth.py) (talking to Keycloak)
+- Add `from loguru import logger` at the top.
+- **In `get_demo_token` (line 34):**
+  - before the POST: `logger.debug("Requesting token from {} for user '{}'", TOKEN_URL, username)`
+  - after it: `logger.info("Keycloak issued token for '{}' (HTTP {})", username, resp.status_code)`
+- **In `verify_token` (line 27):**
+  - after `get_signing_key...`: `logger.debug("Fetched signing key kid={}", signing_key.key_id)`
+  - before returning: decode into a variable named `claims`, then `logger.info("Token valid: user='{}' roles={} exp={}", claims.get("preferred_username"), claims.get("realm_access", {}).get("roles"), claims.get("exp"))`
+
+### Step 5: [agent/main.py](agent/main.py) (the identity gate)
+- **After the imports (around line 30):**
+  ```python
+  from loguru import logger
+  from utilities.logger import setup_logger
+  setup_logger(level="DEBUG", service="agent")
+  ```
+- **In `require_human_identity` (lines 39–52)**, add one log statement on each path:
+  - line 41, missing header: `logger.warning("401: no Bearer token")`
+  - line 46, bad token: `logger.warning("401: invalid token: {}", e)`
+  - line 51, no role: `logger.warning("403: no known role, token has {}", sorted(token_roles))`
+  - before `return` on line 52: `logger.info("Identity OK: user='{}' role='{}'", claims.get("preferred_username"), role)`
+- **Line 70:** replace `print(...)` with `logger.info("Agent booted with SPIFFE ID {}", app.state.spiffe_id)`
+
+### Step 6: [agent/governance_middleware.py](agent/governance_middleware.py), `fetch_svid` (SPIRE agent identity)
+- Add `from loguru import logger` at the top.
+- At the start of the loop (line 46): `logger.debug("Fetching SVID from {} (attempt {}/{})", SPIFFE_SOCKET, attempt + 1, retries)`
+- Before `return spiffe_id` (line 52): `logger.info("Got SPIFFE ID {}", spiffe_id)`
+- **Line 55:** replace `print(...)` with `logger.warning("SVID fetch attempt {}/{} failed: {}", attempt + 1, retries, e)`
+- Before the `raise` on line 59: `logger.error("Giving up on SPIRE after {} attempts — agent will not start", retries)`
+
+### (Optional) [agent/graph.py:63](agent/graph.py#L63), `identity_node`
+`logger.info("Layer 1 identity: user='{}' spiffe='{}'", state["human_user"], state["spiffe_id"])`
+
+This node **always marks the layer as passed**. The real checks have already happened by the time it runs: the token is checked in `require_human_identity` (Step 5), and the SPIFFE ID is fetched at startup (Step 6). The node only records that both identities are attached. Your logs will make this visible.
+
+---
+
+## Step 7: Rebuild and watch the logs
+1. `docker compose up -d --build agent dashboard`
+2. Watch the live output: `docker compose logs -f agent dashboard`
+3. Or open the files in `logs\logs_aigovernance_agent.txt` and `logs\logs_aigovernance_dashboard.txt`
+
+## What you should see
+**When the agent starts:** SVID attempts, then `Got SPIFFE ID spiffe://...`, then `Agent booted with...`. That's the SPIRE (agent identity) part.
+
+**When you send a message as `student`:**
+```
+dashboard | Login attempt as 'student'
+agent     | (keycloak_auth) Requesting token ... for user 'student'   ← runs in the dashboard process
+dashboard | Got Keycloak token for 'student'
+agent     | Token valid: user='student' roles=['demo-agent', ...]
+agent     | Identity OK: user='student' role='demo-agent'
+agent     | Layer 1 identity: user='student' spiffe='spiffe://...'
+```
+
+`get_demo_token` is called by the dashboard, so its log lines go to the **dashboard** log. `verify_token` runs in the **agent**, so its lines go to the agent log.
+
+**To see a failure:** run `curl -X POST localhost:8000/chat -H "Content-Type: application/json" -d "{\"message\":\"hi\"}"`. The agent log should show `401: no Bearer token`.

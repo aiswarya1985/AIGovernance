@@ -1,0 +1,10 @@
+.env
+compliance/reports/*.md
+operations/killswitch.log
+__pycache__/
+*.pyc
+.venv/
+mlflow.db
+mlflow-artifacts/
+spire-data/
+logs/
