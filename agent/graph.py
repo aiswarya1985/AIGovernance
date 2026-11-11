@@ -23,7 +23,7 @@ from langgraph.types import Command
 from agent import governance_middleware as gov
 from agent.agents import orchestrator
 from agent.llm_client import get_client
-
+from loguru import logger
 
 class ChatState(TypedDict, total=False):
     message: str
@@ -61,16 +61,20 @@ ALL_LAYER_NAMES = ["identity", "policy", "data", "model", "agent_guardrails", "t
 
 # --- Node: identity -----------------------------------------------------
 def identity_node(state: ChatState) -> Command:
+    logger.debug(f"[governance] Checking identity(identity_node) for human_user='{state['human_user']}'")
     layers = state["layers"] + [
         _layer("identity", True, f"Keycloak user '{state['human_user']}' + SPIFFE ID {state['spiffe_id']} both attached")
     ]
+    logger.debug(f"[governance] Identity check passed, moving to policy layer. Current layers: {layers}")
     return Command(update={"layers": layers}, goto="policy")
 
 
 # --- Node: policy (kill switch) -----------------------------------------
 def policy_node(state: ChatState) -> Command:
+    logger.debug(f"[governance] Checking policy(policy_node) for spiffe_id='{state['spiffe_id']}'")
     allowed, reason = gov.check_kill_switch(state["spiffe_id"])
     layers = state["layers"] + [_layer("policy", allowed, reason or "identity is active, not revoked")]
+    logger.debug(f"[governance] Policy check {'passed' if allowed else 'failed'}. Current layers: {layers}")
     if not allowed:
         layers = _skip_to_logged(layers, ["data", "model", "agent_guardrails", "tool_call"], "policy")
         return Command(update={"layers": layers, "blocked_at": "policy"}, goto="logged")
@@ -79,6 +83,7 @@ def policy_node(state: ChatState) -> Command:
 
 # --- Node: data (PII masking decision) ----------------------------------
 def data_node(state: ChatState) -> Command:
+    logger.debug(f"[governance] Checking data(data_node) for spiffe_id='{state['spiffe_id']}'")
     mask_columns = gov.get_columns_to_mask()
     layers = state["layers"] + [_layer("data", True, f"columns to mask this request: {mask_columns or 'none'}")]
     return Command(update={"layers": layers, "mask_columns": mask_columns}, goto="model")

@@ -19,9 +19,9 @@ limitations: >
   what Guardrails AI / Agent Governance Toolkit catch at agent runtime.
 
 versions:
-  - version_alias: v1_llama_staging
+  - version_alias: v3_gpt_oss_20b_staging
     provider: groq
-    model_id: llama-3.1-8b-instant
+    model_id: openai/gpt-oss-20b
     stage: Staging
     evaluate_for_production: true
     risk_tier: high

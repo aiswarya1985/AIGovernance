@@ -9,7 +9,6 @@ no LangChain agent-executor hiding this plumbing). Layers, in call order:
   6. AGT runtime screening      -> agent_os.StatelessKernel (real runtime policy gate)
   7. Guardrails output check    -> local heuristic validator
 """
-from asyncio.log import logger
 import os
 import re
 
@@ -67,12 +66,14 @@ def fetch_svid(retries: int = 30, delay_seconds: float = 2.0) -> str:
 # OPA — the one shared policy hub, queried from 3 places
 # ---------------------------------------------------------------------------
 def _opa_query(package_path: str, input_doc: dict) -> dict:
+    logger.debug(f"[governance] Querying OPA at {OPA_URL}/v1/data/{package_path} with input: {input_doc}")
     resp = requests.post(f"{OPA_URL}/v1/data/{package_path}", json={"input": input_doc}, timeout=5)
     resp.raise_for_status()
     return resp.json().get("result", {})
 
 
 def check_kill_switch(identity: str) -> tuple[bool, str]:
+    logger.debug(f"[governance](check_kill_switch) Checking kill switch for identity: {identity}")
     result = _opa_query("governance/kill_switch", {"identity": identity})
     return bool(result.get("allow", True)), result.get("reason", "")
 
@@ -124,6 +125,7 @@ def get_columns_to_mask(table_name: str = "customers") -> list[str]:
     except Exception as e:  # pragma: no cover
         print(f"[governance] OpenMetadata tag lookup failed ({e}); no columns masked this request")
         return []
+    logger.debug(f"[governance] OpenMetadata columns with tags: {columns_with_tags}")
     return get_mask_columns(columns_with_tags)
 
 

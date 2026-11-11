@@ -113,3 +113,7 @@ agent     | Layer 1 identity: user='student' spiffe='spiffe://...'
 `get_demo_token` is called by the dashboard, so its log lines go to the **dashboard** log. `verify_token` runs in the **agent**, so its lines go to the agent log.
 
 **To see a failure:** run `curl -X POST localhost:8000/chat -H "Content-Type: application/json" -d "{\"message\":\"hi\"}"`. The agent log should show `401: no Bearer token`.
+
+To restart
+
+docker compose restart agent
