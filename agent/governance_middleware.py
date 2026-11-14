@@ -18,6 +18,7 @@ from mlflow.tracking import MlflowClient
 from agent import om_client
 from agent.agents import admin_agent, billing_agent, order_agent
 from loguru import logger
+from utilities.logger import pretty
 
 ALL_TOOLS = {**order_agent.TOOLS, **billing_agent.TOOLS, **admin_agent.TOOLS}
 
@@ -66,7 +67,7 @@ def fetch_svid(retries: int = 30, delay_seconds: float = 2.0) -> str:
 # OPA — the one shared policy hub, queried from 3 places
 # ---------------------------------------------------------------------------
 def _opa_query(package_path: str, input_doc: dict) -> dict:
-    logger.debug(f"[governance] Querying OPA at {OPA_URL}/v1/data/{package_path} with input: {input_doc}")
+    logger.debug(f"[governance] Querying OPA at {OPA_URL}/v1/data/{package_path} with input: {pretty(input_doc)}")
     resp = requests.post(f"{OPA_URL}/v1/data/{package_path}", json={"input": input_doc}, timeout=5)
 
     resp.raise_for_status()
@@ -85,7 +86,7 @@ def check_tool_access(role: str, tool: str, spiffe_id: str) -> tuple[bool, str]:
         "governance/tool_access",
         {"subject": {"role": role, "spiffe_id": spiffe_id}, "action": "invoke_tool", "tool": tool},
     )
-    logger.info(f"tool access check result: {result}")
+    logger.info(f"tool access check result: {pretty(result)}")
     return bool(result.get("allow", False)), result.get("reason", "")
 
 
@@ -129,7 +130,7 @@ def get_columns_to_mask(table_name: str = "customers") -> list[str]:
     except Exception as e:  # pragma: no cover
         print(f"[governance] OpenMetadata tag lookup failed ({e}); no columns masked this request")
         return []
-    logger.debug(f"[governance] OpenMetadata columns with tags: {columns_with_tags}")
+    logger.debug(f"[governance] OpenMetadata columns with tags: {pretty(columns_with_tags)}")
     return get_mask_columns(columns_with_tags)
 
 
@@ -170,7 +171,7 @@ def check_model_version_gate(role: str, requested_version: str | None) -> dict:
         if not versions:
             return {"pass": False, "reason": f"no version of {MODEL_NAME} is in stage 'Production'"}
         info = _model_info(versions[0])
-        logger.info(f"latest Production version info: {info}")
+        logger.info(f"latest Production version info: {pretty(info)}")
     else:
         v = client.get_model_version(MODEL_NAME, requested_version)
         if v.current_stage != "Production":
@@ -278,9 +279,9 @@ _kernel = StatelessKernel(policies=_AGT_POLICIES)
 def call_tool_governed(role: str, name: str, **kwargs) -> tuple[bool, str, object]:
     """Returns (ok, reason, result). Real AGT policy decision; real tool
     execution only happens if AGT allows it."""
-    logger.info(f"entering AGT tool call for role '{role}', tool '{name}' with args: {kwargs}")
+    logger.info(f"entering AGT tool call for role '{role}', tool '{name}' with args: {pretty(kwargs)}")
     context = ExecutionContext(agent_id=role, policies=_ROLE_TO_AGT_POLICIES.get(role, []))
-    logger.info(f"AGT tool call context: {context}")
+    logger.info(f"AGT tool call context: {pretty(context)}")
     gate = asyncio.run(_kernel.execute(action=name, params=kwargs, context=context))
     if not gate.success:
         return False, gate.error, None

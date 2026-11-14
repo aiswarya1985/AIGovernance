@@ -1,0 +1,44 @@
+Written for: your own study notes. Your wording kept, corrections marked with **>>**.
+
+1. A normal user types in username and password ✅
+
+2. We request keycloak for a token that expires in 5 mins ✅
+
+3. token signed with private key ✅ (Keycloak's private key, RS256)
+
+4. we verify token with keycloack public key ✅ (fetched from the JWKS URL, matched by `kid`)
+
+5. we get role of user fron keycloak ✅
+   **>>** Small precision: the role is read from inside the token itself (`realm_access.roles`), not by asking Keycloak again. One trip, not two.
+
+6. set identity for agent spifee
+   **>> Correction:** this is not done per request. The SPIFFE ID is fetched **once at agent startup** from the SPIRE socket and cached. Each request just reads the cached value. Also put this step **before step 1** in the order, since it happens when the container boots, long before any user logs in.
+
+7. OPA -open policy access check if identity correct and not revoked
+   **>> Correction:** OPA = Open Policy **Agent**, not "access". And this step only checks "not revoked" (kill switch). It does not check that the identity is "correct". The identity node before it hardcodes pass, which is one of the gaps you found.
+
+8. open meta data - check PII columns to be masked
+   **>> Add:** two tools, not one. OpenMetadata supplies the tags (`email` is `PII.Sensitive`), then **OPA** decides which tagged columns to mask. Masking itself is applied later, after the tool returns data.
+
+9. check if we are calling valid model with prod promoted in ML
+   **>> Correction:** "ML" should be **MLflow**. And there are two checks here: (a) a version is in Production stage, and (b) OPA says this role may use that version's risk tier.
+
+10. guard rails
+    **>> Add:** this is the **input** check only (prompt injection patterns). The **output** check (email leak) happens at the very end, after the tool result, before logging. Two guardrail steps, not one.
+
+    **>> Missing step between 10 and 11:** **routing**. The LLM picks a specialist (order/billing/admin) and writes an instruction, then OPA checks `route:<agent>` is allowed for this role.
+
+11. tool check - agent has which tools access ? agent allowed to make calls to tools?
+    **>> Add:** this is also two steps. First the specialist's LLM **picks** the tool (`tool_select`). Then **OPA** checks the role may call that tool (`tool_authz`).
+
+12. agent is not calling any blocked tool - AGT- agent governance kit microsoft
+    **>> Correction:** "Agent Governance **Toolkit**". And note it runs **after** OPA already allowed the tool, as a second independent gate. If AGT says yes, the real tool function runs here.
+
+    **>> Missing step after 12:** final answer. LLM turns the masked tool result into a sentence. Then **output guardrails** (step 10's second half).
+
+13. loggeer - latest id from langfuse
+    **>> Correction:** Langfuse does not give us the ID. The **agent generates** the trace ID at the start of the request and sends events to Langfuse under it. Step 13 just closes the trace with the final answer and layer results.
+
+14. logger previous hash and current hash to ensure logger not tampered
+    **>> Correction:** this is the **audit log**, not the logger, and it is not a step in the chat flow. **OPA** pushes every decision to the agent every few seconds in the background, and `ingest()` hash-chains them into Postgres. "Verify chain integrity" is a separate button you press, not part of the request path.
+

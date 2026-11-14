@@ -24,6 +24,7 @@ from agent import governance_middleware as gov
 from agent.agents import orchestrator
 from agent.llm_client import get_client
 from loguru import logger
+from utilities.logger import pretty
 
 class ChatState(TypedDict, total=False):
     message: str
@@ -65,7 +66,7 @@ def identity_node(state: ChatState) -> Command:
     layers = state["layers"] + [
         _layer("identity", True, f"Keycloak user '{state['human_user']}' + SPIFFE ID {state['spiffe_id']} both attached")
     ]
-    logger.debug(f"[governance] Identity check passed, moving to policy layer. Current layers: {layers}")
+    logger.debug(f"[governance] Identity check passed, moving to policy layer. Current layers: {pretty(layers)}")
     return Command(update={"layers": layers}, goto="policy")
 
 
@@ -74,7 +75,7 @@ def policy_node(state: ChatState) -> Command:
     logger.debug(f"[governance] Checking policy(policy_node) for spiffe_id='{state['spiffe_id']}'")
     allowed, reason = gov.check_kill_switch(state["spiffe_id"])
     layers = state["layers"] + [_layer("policy", allowed, reason or "identity is active, not revoked")]
-    logger.debug(f"[governance] Policy check {'passed' if allowed else 'failed'}. Current layers: {layers}")
+    logger.debug(f"[governance] Policy check {'passed' if allowed else 'failed'}. Current layers: {pretty(layers)}")
     if not allowed:
         layers = _skip_to_logged(layers, ["data", "model", "agent_guardrails", "tool_call"], "policy")
         return Command(update={"layers": layers, "blocked_at": "policy"}, goto="logged")
@@ -93,13 +94,13 @@ def data_node(state: ChatState) -> Command:
 def model_node(state: ChatState) -> Command:
     logger.info("entering model governance gate check")
     check = gov.check_model_version_gate(state["role"], state.get("model_version"))
-    logger.info(f"model governance gate check result: {check}")
+    logger.info(f"model governance gate check result: {pretty(check)}")
     reason = check.get(
         "reason",
         f"using version {check.get('version')} ({check.get('provider')}/{check.get('model_id')}, risk_tier={check.get('risk_tier')})",
     )
     layers = state["layers"] + [_layer("model", check["pass"], reason)]
-    logger.info(f"model governance gate check {'passed' if check['pass'] else 'failed'}. Current layers: {layers}")
+    logger.info(f"model governance gate check {'passed' if check['pass'] else 'failed'}. Current layers: {pretty(layers)}")
     if not check["pass"]:
         layers = _skip_to_logged(layers, ["agent_guardrails", "tool_call"], "model")
         return Command(update={"layers": layers, "blocked_at": "model"}, goto="logged")
@@ -118,7 +119,7 @@ def guardrails_input_node(state: ChatState) -> Command:
 
 # --- Node: routing (orchestrator handoff + OPA route authorization) -----
 def routing_node(state: ChatState) -> Command:
-    logger.info(f"entering routing node for message: {state}")
+    logger.info(f"entering routing node for message: {pretty(state)}")
     client = get_client(state["provider"])
     trace = state["trace"]
 
@@ -155,8 +156,8 @@ def tool_select_node(state: ChatState) -> Command:
 
     resp = client.chat.completions.create(model=state["model_id"], messages=messages, tools=specialist.TOOL_SCHEMAS)
     choice = resp.choices[0].message
-    logger.info(f"resp: {resp}")
-    logger.info(f"choice: {choice}")
+    logger.info(f"resp: {pretty(resp)}")
+    logger.info(f"choice: {pretty(choice)}")
     if trace:
         trace.generation(
             name=f"{state['agent_name']}-tool-selection", model=state["model_id"], input=messages,
@@ -172,7 +173,7 @@ def tool_select_node(state: ChatState) -> Command:
     out_ok, out_reason = gov.validate_output(answer)
     layers = state["layers"]
     for l in layers:
-        logger.info(f"layer: {l}")
+        logger.info(f"layer: {pretty(l)}")
         if l["layer"] == "agent_guardrails":
             l["reason"] += "; output check passed" if out_ok else f"; {out_reason}"
             l["pass"] = l["pass"] and out_ok
@@ -182,7 +183,7 @@ def tool_select_node(state: ChatState) -> Command:
 
 # --- Node: tool_authz (OPA Call 2) ---------------------------------------
 def tool_authz_node(state: ChatState) -> Command:
-    logger.info(f"entering tool_authz node for tool '{state['tool_name']}' with args: {state['tool_args']}")
+    logger.info(f"entering tool_authz node for tool '{state['tool_name']}' with args: {pretty(state['tool_args'])}")
     allowed, reason = gov.check_tool_access(state["role"], state["tool_name"], state["spiffe_id"])
     if not allowed:
         layers = state["layers"] + [_layer("tool_call", False, f"{state['routing_note']}; tool denied: {reason}")]
@@ -192,7 +193,7 @@ def tool_authz_node(state: ChatState) -> Command:
 
 # --- Node: agt_execute (AGT StatelessKernel screen + real execution) -----
 def agt_execute_node(state: ChatState) -> Command:
-    logger.info(f"entering agt_execute node for tool '{state['tool_name']}' with args: {state['tool_args']}")
+    logger.info(f"entering agt_execute node for tool '{state['tool_name']}' with args: {pretty(state['tool_args'])}")
     ok, reason, result = gov.call_tool_governed(state["role"], state["tool_name"], **state["tool_args"])
     logger.info(f"agt_execute result: ok={ok}, reason={reason}, result={result}")
     if not ok:
@@ -200,7 +201,7 @@ def agt_execute_node(state: ChatState) -> Command:
         return Command(update={"layers": layers, "blocked_at": "tool_call"}, goto="logged")
 
     mask_columns = state["mask_columns"]
-    logger.info(f"masking result with columns: {mask_columns}")
+    logger.info(f"masking result with columns: {pretty(mask_columns)}")
     if isinstance(result, dict):
         result = gov.mask_record(result, mask_columns)
     elif isinstance(result, list):
@@ -209,20 +210,20 @@ def agt_execute_node(state: ChatState) -> Command:
     layers = state["layers"] + [
         _layer("tool_call", True, f"{state['routing_note']}; tool '{state['tool_name']}' authorized (OPA) and screened (AGT); result masked per data layer")
     ]
-    logger.info(f"agt_execute node completed successfully. Current layers: {layers}")
+    logger.info(f"agt_execute node completed successfully. Current layers: {pretty(layers)}")
     return Command(update={"layers": layers, "tool_result": result}, goto="final_answer")
 
 
 # --- Node: final_answer (LLM call combining the tool result) -------------
 def final_answer_node(state: ChatState) -> Command:
-    logger.info(f"entering final_answer node for tool '{state['tool_name']}' with result: {state['tool_result']}")
+    logger.info(f"entering final_answer node for tool '{state['tool_name']}' with result: {pretty(state['tool_result'])}")
     client = get_client(state["provider"])
     messages = [
         {"role": "user", "content": state["instruction"]},
         {"role": "assistant", "content": f"Calling {state['tool_name']}({state['tool_args']})"},
         {"role": "user", "content": f"Tool result: {json.dumps(state['tool_result'])}. Answer the original question using this."},
     ]
-    logger.info(f"final_answer node messages: {messages}")
+    logger.info(f"final_answer node messages: {pretty(messages)}")
     resp = client.chat.completions.create(model=state["model_id"], messages=messages)
     answer = resp.choices[0].message.content or ""
     logger.info(f"final_answer node received answer: {answer}")

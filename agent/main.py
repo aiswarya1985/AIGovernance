@@ -30,7 +30,7 @@ from agent import startup_automation
 from agent.graph import CHAT_GRAPH
 
 from loguru import logger
-from utilities.logger import setup_logger
+from utilities.logger import setup_logger,pretty
 setup_logger(level="DEBUG", service="agent")
 
 app = FastAPI(title="AI Governance Demo Agent")
@@ -51,7 +51,7 @@ def require_human_identity(authorization: str = Header(default=None)) -> tuple[d
         raise HTTPException(status_code=401, detail=f"invalid Keycloak token: {e}") from e
 
     token_roles = set(claims.get("realm_access", {}).get("roles", []))
-    logger.debug(f"Token roles: {sorted(token_roles)}")
+    logger.debug(f"Token roles: {pretty(sorted(token_roles))}")
     role = next((r for r in KNOWN_ROLES if r in token_roles), None)
     logger.debug(f"Determined role from token: {role}")
     if role is None:
@@ -123,7 +123,7 @@ def chat(req: ChatRequest, identity: tuple[dict, str] = Depends(require_human_id
         "answer": None,
         "trace": trace,
     }
-    logger.debug(f"Initial state for CHAT_GRAPH: {initial_state}")
+    logger.debug(f"Initial state for CHAT_GRAPH: {pretty(initial_state)}")
     final_state = CHAT_GRAPH.invoke(initial_state)
 
     return {

@@ -33,7 +33,7 @@ from operations.kill_switch import restore as ks_restore
 from operations.kill_switch import revoke as ks_revoke
 
 from loguru import logger
-from utilities.logger import setup_logger
+from utilities.logger import pretty, setup_logger
 setup_logger(level="DEBUG", service="dashboard")
 
 AGENT_URL = os.environ.get("AGENT_URL", "http://agent:8000")
@@ -157,7 +157,7 @@ with tab_live:
         with st.spinner("Walking all 7 governance layers..."):
             try:
                 username, password = LOGINS[login_choice]
-                logger.debug(f"Sending request to {AGENT_URL}/chat with payload: {payload} as user: {username}")
+                logger.debug(f"Sending request to {AGENT_URL}/chat with payload: {pretty(payload)} as user: {username}")
                 token = get_demo_token(username=username, password=password)
                 logger.debug(f"Obtained token: {token[:10]}... (truncated for security)")
                 resp = requests.post(f"{AGENT_URL}/chat", json=payload, headers={"Authorization": f"Bearer {token}"}, timeout=30)

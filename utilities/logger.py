@@ -4,6 +4,7 @@
 """
 
 import sys
+import json
 
 from loguru import logger
 
@@ -17,6 +18,15 @@ LOG_FORMAT = (
     "{name}:{function}:{line} - {message}"
 )
 FILE_LOG_FORMAT = LOG_FORMAT + "\n"  
+
+
+
+def pretty(obj) -> str:
+    """Pretty-print dicts/lists for log messages; falls back to str() for non-JSON types."""
+    try:
+        return json.dumps(obj, indent=2, default=str, ensure_ascii=False)
+    except Exception:
+        return str(obj)
 
 
 def setup_logger(level: str = "INFO",service: str = "app") -> None:
