@@ -117,3 +117,4 @@ agent     | Layer 1 identity: user='student' spiffe='spiffe://...'
 To restart
 
 docker compose restart agent
+docker compose restart agent dashboard

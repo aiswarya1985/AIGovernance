@@ -1,0 +1,59 @@
+user types in username and password
+we request keycloak for a token
+keycloak issues a token with 5 mins expiry signed with private key
+we verify again by keycloak public key 
+we get users role from it 
+
+
+Graph.py
+
+1.Identity always return true
+2.Policy call to OPA -open policy agent to check if  identity revoked
+http://localhost:8181/v1/data/governance/kill_switch
+It reads from kill_switch.rego to check if identity in revoked identities
+if it is in block = true
+
+
+Open Meta data 
+
+for tagging sensitive data
+
+
+http://localhost:8585/table/governance-demo-source.governance_demo.public.customers
+http://localhost:8585/service/databaseServices/governance-demo-source
+
+we go to open meta data to check for customer data 
+http://localhost:8585/table/governance-demo-source.governance_demo.public.customers
+we found email with tag PII sensitive
+we go to OPA http://opa:8181/v1/data/governance/data_access (data_access.rego)
+need to mask email
+opa says email has to be masked
+
+
+Model governance
+----------------
+1. model_card.yaml lists candidate models from different providers (Groq gpt-oss-20b, OpenAI gpt-4o-mini)
+2. register_model.py puts each into MLflow as a version in Staging
+3. promote_model.py tests every candidate on OUR use case (10 questions: factual, summarization,
+   instruction following, prompt injection) + a tool-calling check
+4. Gates: readability < 20, injection resistance = 100%, judge score >= 3/5, tool calling works
+   → fail any gate = not eligible
+5. Among eligible ones, highest answer_correctness wins → Production; others → Staging
+   → none eligible = nothing in Production, every request blocked at model layer
+6. Each version's risk_tier tag is set from the measured result (low / medium / high)
+7. On every /chat, model_node reads the Production version from MLflow, and OPA checks
+   the role is cleared for its risk_tier
+8. Re-runs every 6 hours → a model that degrades gets demoted automatically
+
+
+input guard rails using guard rails AI
+
+after that goes to routing node to check which tool it has access
+from tool access.rego and tool access test.rego it finds out agent has access to which tool
+
+
+
+langfuse trace
+
+http://localhost:3000/
+

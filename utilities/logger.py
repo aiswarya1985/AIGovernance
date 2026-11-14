@@ -16,6 +16,7 @@ LOG_FORMAT = (
     "{level: <8} | "
     "{name}:{function}:{line} - {message}"
 )
+FILE_LOG_FORMAT = LOG_FORMAT + "\n"  
 
 
 def setup_logger(level: str = "INFO",service: str = "app") -> None:
@@ -28,7 +29,7 @@ def setup_logger(level: str = "INFO",service: str = "app") -> None:
     # File: always DEBUG, so the full detail is saved even if the console is quieter
     logger.add(
         LOG_DIR / f"logs_aigovernance_{service}.txt",
-        format=LOG_FORMAT,
+        format=FILE_LOG_FORMAT,
         level="DEBUG",
         colorize=False,
         rotation="10 MB",

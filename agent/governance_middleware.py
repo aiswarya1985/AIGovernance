@@ -68,6 +68,7 @@ def fetch_svid(retries: int = 30, delay_seconds: float = 2.0) -> str:
 def _opa_query(package_path: str, input_doc: dict) -> dict:
     logger.debug(f"[governance] Querying OPA at {OPA_URL}/v1/data/{package_path} with input: {input_doc}")
     resp = requests.post(f"{OPA_URL}/v1/data/{package_path}", json={"input": input_doc}, timeout=5)
+
     resp.raise_for_status()
     return resp.json().get("result", {})
 
@@ -79,10 +80,12 @@ def check_kill_switch(identity: str) -> tuple[bool, str]:
 
 
 def check_tool_access(role: str, tool: str, spiffe_id: str) -> tuple[bool, str]:
+    logger.info(f"entering tool access check for role: {role}, tool: {tool}, spiffe_id: {spiffe_id}")
     result = _opa_query(
         "governance/tool_access",
         {"subject": {"role": role, "spiffe_id": spiffe_id}, "action": "invoke_tool", "tool": tool},
     )
+    logger.info(f"tool access check result: {result}")
     return bool(result.get("allow", False)), result.get("reason", "")
 
 
@@ -92,6 +95,7 @@ def check_model_access(role: str, risk_tier: str | None) -> tuple[bool, str]:
     version because of its risk_tier even when that version is already in
     the Production stage — this is what actually makes 'risk tier' a
     control, not just a label in a report."""
+    logger.info("entering model access check")
     if not risk_tier:
         return True, ""
     result = _opa_query("governance/model_access", {"role": role, "risk_tier": risk_tier})
@@ -157,12 +161,16 @@ def check_model_version_gate(role: str, requested_version: str | None) -> dict:
     Production may serve traffic (Scenario E); (2) OPA risk-based access —
     the requesting role must be cleared for this version's risk_tier, even
     if it's already in Production (this is the new check)."""
+    logger.info("entering model governance gate check")
     client = MlflowClient()
+    logger.info(f"model version: {requested_version}")
     if not requested_version:
+        logger.info("no version requested, checking latest Production version")
         versions = client.get_latest_versions(MODEL_NAME, stages=["Production"])
         if not versions:
             return {"pass": False, "reason": f"no version of {MODEL_NAME} is in stage 'Production'"}
         info = _model_info(versions[0])
+        logger.info(f"latest Production version info: {info}")
     else:
         v = client.get_model_version(MODEL_NAME, requested_version)
         if v.current_stage != "Production":
@@ -200,8 +208,10 @@ INJECTION_PATTERNS = [
 @register_validator(name="governance/detect-injection", data_type="string")
 class DetectInjection(Validator):
     def validate(self, value, metadata):
+        logger.info(f"entering input guard validation for value: {value}")
         lowered = value.lower()
         hit = next((p for p in INJECTION_PATTERNS if p in lowered), None)
+        logger.info(f"input guard validation result: {'hit' if hit else 'pass'}")
         if hit:
             return FailResult(error_message=f"possible prompt-injection pattern detected: '{hit}'")
         return PassResult()
@@ -212,6 +222,7 @@ EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 
 @register_validator(name="governance/detect-pii-leak", data_type="string")
 class DetectPiiLeak(Validator):
+    logger.info("entering output guard validation for PII leak detection")
     def validate(self, value, metadata):
         if EMAIL_RE.search(value):
             return FailResult(error_message="output still contains an unmasked email address")
@@ -224,6 +235,7 @@ _output_guard = Guard().use(DetectPiiLeak())
 
 def validate_input(text: str) -> tuple[bool, str]:
     try:
+        logger.info("entering input guard validation")
         _input_guard.validate(text)
         return True, ""
     except Exception as e:
@@ -231,6 +243,7 @@ def validate_input(text: str) -> tuple[bool, str]:
 
 
 def validate_output(text: str) -> tuple[bool, str]:
+    logger.info("entering output guard validation")
     try:
         _output_guard.validate(text)
         return True, ""
@@ -265,7 +278,9 @@ _kernel = StatelessKernel(policies=_AGT_POLICIES)
 def call_tool_governed(role: str, name: str, **kwargs) -> tuple[bool, str, object]:
     """Returns (ok, reason, result). Real AGT policy decision; real tool
     execution only happens if AGT allows it."""
+    logger.info(f"entering AGT tool call for role '{role}', tool '{name}' with args: {kwargs}")
     context = ExecutionContext(agent_id=role, policies=_ROLE_TO_AGT_POLICIES.get(role, []))
+    logger.info(f"AGT tool call context: {context}")
     gate = asyncio.run(_kernel.execute(action=name, params=kwargs, context=context))
     if not gate.success:
         return False, gate.error, None

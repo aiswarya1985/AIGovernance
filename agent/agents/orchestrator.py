@@ -11,6 +11,7 @@ before ever invoking the chosen specialist, so an unauthorized handoff
 even in play — see policy/policies/tool_access.rego.
 """
 import json
+from venv import logger
 
 from agent.agents import admin_agent, billing_agent, order_agent
 
@@ -60,4 +61,6 @@ def classify(client, model_id: str, message: str) -> tuple[str, str]:
     agent_name = args["agent"]
     if agent_name not in AGENTS:
         raise ValueError(f"orchestrator routed to unknown agent '{agent_name}'")
+    logger.info(f"orchestrator routed to agent '{agent_name}'")
+    logger.info(f"orchestrator instruction: {args.get('instruction', message)}")
     return agent_name, args.get("instruction", message)
